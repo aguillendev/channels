@@ -7,14 +7,14 @@ A modular, extensible, and production-ready NestJS library for sending and recei
 - **Strongly Typed DTOs:** Out-of-the-box support for complex message types like Quick Replies, List Pickers, Carousels, WhatsApp Cards, Flows, etc.
 - **Unified Interface:** Adapters implement the `IMessagingProvider` interface. Your app interacts with the same API regardless of the underlying platform.
 - **Inbound Event Normalization:** Automatically transforms raw provider webhooks into unified `IInboundMessage` or `IDeliveryReceipt` objects.
-- **Webhook Security:** Built-in NestJS guards to verify webhook challenges.
+- **Built-in Controllers:** The library provides built-in HTTP controllers to instantly receive webhooks and expose an outbound messaging API without writing boilerplate code.
 
 ---
 
 ## Installation
 
 ```bash
-npm install multi-platform-messaging class-validator class-transformer
+npm install multi-platform-messaging class-validator class-transformer rxjs
 ```
 
 ---
@@ -23,7 +23,9 @@ npm install multi-platform-messaging class-validator class-transformer
 
 Import the `MessagingModule` into your root `AppModule`. You can configure it statically using `forRoot` or dynamically (e.g. to inject configuration variables) using `forRootAsync`.
 
-### Dynamic Configuration (`forRootAsync`)
+### Dynamic Configuration with Built-in Controllers
+
+Setting `enableControllers: true` activates the `InboundController` and `OutboundController` out-of-the-box.
 
 ```typescript
 import { Module } from '@nestjs/common';
@@ -42,10 +44,12 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
         return {
+          enableControllers: true, // Enables /messaging/webhooks and /messaging/outbound routes
           providers: [
             new MetaWhatsAppAdapter(
               configService.get('META_ACCESS_TOKEN'),
-              configService.get('META_PHONE_NUMBER_ID')
+              configService.get('META_PHONE_NUMBER_ID'),
+              configService.get('META_VERIFY_TOKEN') // Optional for webhook verification
             ),
             new TwilioWhatsAppAdapter(
               configService.get('TWILIO_ACCOUNT_SID'),
@@ -63,120 +67,80 @@ export class AppModule {}
 
 ---
 
-## Sending Messages (Outbound)
+## Built-in API Endpoints
 
-Inject the `MessagingService` into your controllers or services to send messages.
+When `enableControllers: true` is configured, the library exposes the following endpoints:
+
+### Send a Message (Outbound)
+**POST** `/messaging/outbound/:provider`
+*(e.g., `POST /messaging/outbound/meta-whatsapp`)*
+
+Body payload (strongly typed using `OutboundMessageDto`):
+```json
+{
+  "to": "1234567890",
+  "platform": "whatsapp",
+  "payload": {
+    "type": "text",
+    "text": "Hello world"
+  }
+}
+```
+
+### Webhooks (Inbound)
+**GET** `/messaging/webhooks/:provider`
+*(Used for Meta hub.challenge verification)*
+
+**POST** `/messaging/webhooks/:provider`
+*(Receives events from Meta/Twilio, normalizes them, and emits them internally)*
+
+---
+
+## Listening to Webhooks Internally (RxJS)
+
+If you use the built-in inbound webhook controller, the normalized messages and receipts are emitted using an RxJS `Subject` on the `MessagingService`.
+
+You can listen to them anywhere in your application:
 
 ```typescript
-import { Injectable } from '@nestjs/common';
-import {
-  MessagingService,
-  MessageType,
-  PlatformType,
-  IOutboundMessage
-} from 'multi-platform-messaging';
+import { Injectable, OnModuleInit } from '@nestjs/common';
+import { MessagingService, IInboundMessage, IDeliveryReceipt } from 'multi-platform-messaging';
 
 @Injectable()
-export class NotificationService {
+export class NotificationListenerService implements OnModuleInit {
   constructor(private readonly messagingService: MessagingService) {}
 
-  async sendTextMessage() {
-    const message: IOutboundMessage = {
-      to: '1234567890',
-      platform: PlatformType.WHATSAPP,
-      payload: {
-        type: MessageType.TEXT,
-        text: 'Hello from NestJS multi-platform messaging!'
-      }
-    };
-
-    // Send using the Meta WhatsApp provider
-    await this.messagingService.sendMessage('meta-whatsapp', message);
-  }
-
-  async sendInteractiveMessage() {
-    const message: IOutboundMessage = {
-      to: '1234567890',
-      platform: PlatformType.WHATSAPP,
-      payload: {
-        type: MessageType.QUICK_REPLY,
-        text: 'Are you satisfied with our service?',
-        buttons: [
-          { id: 'btn_yes', title: 'Yes' },
-          { id: 'btn_no', title: 'No' }
-        ]
-      }
-    };
-
-    await this.messagingService.sendMessage('meta-whatsapp', message);
-  }
-}
-```
-
----
-
-## Receiving Messages (Inbound Webhooks)
-
-You can build endpoints to handle incoming messages or delivery receipts. Use the `normalizer` functions provided by the library to convert varying payload structures into a single unified format.
-
-### Verifying Meta Webhooks
-
-Use the `MetaVerifyGuard` to securely handle Meta's hub challenge during webhook setup.
-
-```typescript
-import { Controller, Get, Post, Body, UseGuards, Req } from '@nestjs/common';
-import {
-  MessagingService,
-  MetaVerifyGuard,
-  IInboundMessage,
-  IDeliveryReceipt
-} from 'multi-platform-messaging';
-
-@Controller('webhooks/meta')
-export class MetaWebhookController {
-  constructor(private readonly messagingService: MessagingService) {}
-
-  // 1. Verify Webhook (GET)
-  // Protect the route using the MetaVerifyGuard, passing your verify_token
-  @Get()
-  @UseGuards(new MetaVerifyGuard('my_secret_verify_token'))
-  verifyWebhook() {
-    // The Guard automatically responds to Meta with the hub.challenge if successful.
-  }
-
-  // 2. Receive Messages/Receipts (POST)
-  @Post()
-  receiveEvent(@Body() rawPayload: any) {
-    // Normalize the event
-    const events = this.messagingService.normalizeWebhook('meta-whatsapp', rawPayload);
-
-    for (const event of events) {
+  onModuleInit() {
+    this.messagingService.inboundEvents$.subscribe((event) => {
       if ('status' in event) {
-        // It's a delivery receipt
         const receipt = event as IDeliveryReceipt;
-        console.log(`Message ${receipt.id} status is now: ${receipt.status}`);
+        console.log(`Receipt: ${receipt.id} status updated to ${receipt.status}`);
       } else {
-        // It's an inbound message
         const message = event as IInboundMessage;
-        console.log(`Received message from ${message.from}: `, message.payload);
+        console.log(`New Message from ${message.from}: `, message.payload);
       }
-    }
-
-    // Acknowledge receipt to the provider quickly
-    return 'EVENT_RECEIVED';
+    });
   }
 }
 ```
 
 ---
 
-## Advanced Usage
+## Advanced: Manual Implementation
 
-For validating incoming HTTP requests using the library DTOs, you can use `@Body()` decorators paired with the `ValidationPipe` built into NestJS:
+If you choose *not* to enable the built-in controllers, you can inject `MessagingService` into your own controllers and use the manual methods.
 
+### Sending manually:
 ```typescript
-import { TextDto, QuickReplyDto } from 'multi-platform-messaging';
+await this.messagingService.sendMessage('meta-whatsapp', messageObj);
+```
 
-// You can use these classes inside your own modules to ensure type safety
-// when your frontend or other internal services communicate with your API.
+### Receiving manually:
+```typescript
+const events = this.messagingService.normalizeWebhook('meta-whatsapp', rawPayload);
+```
+
+### Verifying manually:
+```typescript
+const challenge = this.messagingService.verifyWebhook('meta-whatsapp', req.query);
 ```

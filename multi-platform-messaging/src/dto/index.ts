@@ -10,3 +10,4 @@ export * from './carousel.dto';
 export * from './catalog.dto';
 export * from './flows.dto';
 export * from './whatsapp-card.dto';
+export * from './outbound-message.dto';

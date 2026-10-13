@@ -15,3 +15,5 @@ export * from './guards/meta-verify.guard';
 
 export * from './module/messaging.service';
 export * from './module/messaging.module';
+export * from './controllers/inbound.controller';
+export * from './controllers/outbound.controller';

@@ -1,9 +1,12 @@
 import { Module, DynamicModule, Provider } from '@nestjs/common';
 import { MessagingService, MESSAGING_PROVIDERS } from './messaging.service';
 import { IMessagingProvider } from '../interfaces/provider.interface';
+import { InboundController } from '../controllers/inbound.controller';
+import { OutboundController } from '../controllers/outbound.controller';
 
 export interface MessagingModuleOptions {
   providers: IMessagingProvider[];
+  enableControllers?: boolean;
 }
 
 export interface MessagingModuleAsyncOptions {
@@ -15,8 +18,11 @@ export interface MessagingModuleAsyncOptions {
 @Module({})
 export class MessagingModule {
   static forRoot(options: MessagingModuleOptions): DynamicModule {
+    const controllers = options.enableControllers ? [InboundController, OutboundController] : [];
+
     return {
       module: MessagingModule,
+      controllers,
       providers: [
         {
           provide: MESSAGING_PROVIDERS,

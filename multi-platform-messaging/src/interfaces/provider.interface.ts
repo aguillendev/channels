@@ -20,4 +20,11 @@ export interface IMessagingProvider {
    * @param rawPayload The raw incoming webhook body
    */
   normalizeInboundEvent(rawPayload: any): (IInboundMessage | IDeliveryReceipt)[];
+
+  /**
+   * Optional method to handle webhook verification challenges (e.g. Meta hub.challenge)
+   * @param query The parsed query string object from the GET request
+   * @returns The challenge response string, or throws an error if invalid
+   */
+  handleVerifyWebhook?(query: any): string;
 }
